@@ -1,0 +1,66 @@
+theory versatile
+begin
+
+builtins: diffie-hellman, symmetric-encryption, asymmetric-encryption, signing, hashing
+
+/*
+ * Creating a platform
+ * Certificate <type, agent, public key, endorsement>
+ */
+
+rule Create_Platform:
+    [ Fr(~key) ]
+  --[ CreatePlatform($P, ~key) ]->
+    [ !PrivateKey('platform', $P, ~key), !Certificate('platform', $P, pk(~key), $P) ]
+
+/*
+ * Creating a device
+ */
+rule Create_Device:
+    [ Fr(~key) ]
+  --[ CreateDevice($A, ~key) ]->
+    [ !PrivateKey('device', $A, ~key), !Certificate('device', $A, pk(~key), P) ]
+
+/*
+ * Corruption: the private key is revealed
+ */
+rule Corrupt_Platform:
+    [ !PrivateKey('platform', $P, key) ]
+  --[ CorruptPlatform($P), LtkCorrupted(key), CorruptLtkOf($P) ]->
+    [ Out(key) ]
+
+rule Corrupt_Device:
+    [ !PrivateKey('device', $A, key) ]
+  --[ CorruptDevice($A), LtkCorrupted(key), CorruptLtkOf($A) ]->
+    [ Out(key) ]
+
+/* 
+ * Protocol Execution
+ */
+rule Send_Request_A:
+  let
+    request_message = < $A, $P, ~flexid, ~qos >
+  in
+    [ Fr(~flexid), Fr(~qos) ]
+  --[ SendRequestMsg(A, P, flexid, qos) ]->
+    [ Out(request_mesage) ]
+
+rule Send_Response_P:
+  let 
+    request_message = < $A, $P, ~flexid, ~qos >
+    response_message = < $A, $B >
+  in
+    [ In(request_message) ]
+  --[ ReceiveRequestMsg(A, P, flexid, qos) ]->
+    [ Out(response_message) ]
+
+rule Send_Hello_A:
+  let
+    response_message = < $A, $B >
+  in 
+    [ In(response_message) ]
+  --[ StartSession(A, B),
+      RequesterHello(A, )
+  
+
+end
