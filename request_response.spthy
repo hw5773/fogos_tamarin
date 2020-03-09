@@ -1,0 +1,134 @@
+theory versatile
+begin
+
+builtins: diffie-hellman
+functions: senc/2, sdec/2, sign/2, verify/3, pk/1, true/0, h/1
+equations: sdec(senc(m, k), k) = m,
+           verify(msg, sign(msg, k), pk(k)) = true
+
+/*
+ * Creating a platform
+ * Certificate <type, agent, public key, endorsement>
+ */
+
+rule Create_Platform:
+    [ Fr(~key) ]
+  --[ CreatePlatform($P, ~key) ]->
+    [ !PrivateKey('platform', $P, ~key), !Certificate('platform', $P, pk(~key), $P) ]
+
+/*
+ * Creating a device
+ */
+rule Create_Device:
+    [ Fr(~key) ]
+  --[ CreateDevice($A, ~key) ]->
+    [ !PrivateKey('device', $A, ~key), !Certificate('device', $A, pk(~key), $P) ]
+
+/*
+ * Trust relationship
+ */
+rule Create_Trust:
+    [ 
+      !Certificate('platform', $P, pk(~k1), $P), 
+      !Certificate('device', $A, pk(~k2), $P)
+    ]
+  --[ TrustRelationship($A, $P) ]->
+    [ 
+      !Trust($A, pk(~k1)), 
+      !Trust($P, pk(~k2))
+    ]
+
+/*
+ * Corruption: the private key is revealed
+ */
+rule Corrupt_Platform:
+    [ !PrivateKey('platform', $P, key) ]
+  --[ CorruptPlatform($P), LtkCorrupted(key), CorruptLtkOf($P) ]->
+    [ Out(key) ]
+
+rule Corrupt_Device:
+    [ !PrivateKey('device', $A, key) ]
+  --[ CorruptDevice($A), LtkCorrupted(key), CorruptLtkOf($A) ]->
+    [ Out(key) ]
+
+/* 
+ * Protocol Execution
+ */
+rule Send_Request_A:
+  let
+    request_message = < A, P, ~flexid, ~qos >
+    signature = sign(request_message, key)
+    out_msg = < request_message, signature >
+  in
+    [ 
+      Fr(~flexid), 
+      Fr(~qos),
+      !Certificate('device', A, pk(key), P)
+    ]
+  --[ SendRequestMsg(A, P, ~flexid, ~qos) ]->
+    [ Out(out_msg) ]
+
+rule Send_Response_P:
+  let 
+    request_message = < $A, $P, ~flexid, ~qos >
+    req_signature = sign(request_message, k1)
+    in_msg = < request_message, req_signature >
+    response_message = < $A, $B >
+    resp_signature = sign(response_message, k2)
+    out_msg = < response_message, resp_signature >
+  in
+    [
+      In(in_msg),
+      !Certificate('device', $A, pk(k1), $P),
+      !Certificate('platform', $P, pk(k2), $P),
+      !Trust($P, pk(k1))
+    ]
+  --[ 
+      EQUAL(verify(req_signature, request_message, pk(k1)), true),
+      ReceiveRequestMsg($A, $P, ~flexid, ~qos, req_signature), 
+      SendResponseMsg($P, $A, $B, resp_signature)
+    ]->
+    [ Out(out_msg) ]
+
+rule Receive_Response_A:
+  let 
+    response_message = < A, B >
+    resp_signature = sign(response_message, key)
+    in_msg = < response_message, resp_signature >
+  in
+    [ 
+      In(in_msg), 
+      !Certificate('platform', P, pk(key), P),
+      !Trust(A, pk(key))
+    ]
+  --[
+      EQUAL(verify(resp_signature, response_message, pk(key)), true),
+      ReceiveResponseMsg(P, A, B, resp_signature)
+    ]->
+    [ Finish(A, B) ]
+
+// ------------------------------ //
+// ----------- Lemmas ----------- //
+// ------------------------------ //
+lemma platform_accountability:
+  all-traces
+  "
+  All A B P m #ta.ReceiveResponseMsg(P, A, B, m)@ta ==>
+  (Ex #tb #tc.(SendResponseMsg(P, A, B, m)@tb 
+              & TrustRelationship(A, P)@tc
+              & (#tb < #ta)
+              & (#tc < #tb)))
+  "
+
+// ------------------------------ //
+// -------- Restrictions -------- //
+// ------------------------------ //
+
+// Equality
+restriction equal:
+"
+  All l r #t.
+    EQUAL(l, r) @t ==> l = r
+"
+
+end

@@ -1,0 +1,54 @@
+\begin{msc}{}
+
+  \declinst{p}{$sk_{P}$}{$P$}
+  \declinst{a}{$sk_{A}$}{$A$}
+  \declinst{b}{$sk_{B}$}{$B$}
+
+  \action*{\rezizebox{
+    Fresh $\text{flexid}$\\
+    Fresh $\text{qos}$\\
+    req $= (\text{flexid}, \text{qos}, \text{Sign}(\text{flexid} || \text{qos}, sk_{A}))$
+  }}{a}
+
+  \nextlevel[2.0]
+  \mess{req}{a}{p}
+  \nextlevel[0.25]
+
+  \action*{\rezizebox{
+    Verify $\text{Sign}(\text{flexid} || \text{qos})$\\
+    resp $= (A, B)$
+  }}{p}
+  \nextlevel[1.6]
+  \mess{resp}{p}{a}
+  \nextlevel[0.25]
+
+  \action*{\rezizebox{
+    Fresh $x$\\
+    helloA $= (g^{x}, pk_{A}, \text{Sign}(H(pk_{A}, sk_{P}))$
+  }}{a}
+  \nextlevel[1.6]
+  \mess{helloA}{a}{b}
+  \nextlevel[0.25]
+
+  \action*{\rezizebox{
+    Authenticate $A$\\
+    Fresh $y$\\
+    MasterSecret $g^{xy}$,\\
+    SessionSecret $k = H(g^{x}, g^{y}, g^{xy})$\\
+    transcript $= \text{Enc}(H(\text{helloA}), k)$\\
+    helloB $= (g^{y}, pk_{B}, \text{Sign}(\text{transcript}, sk_{B}))$
+  }}{b}
+  \nextlevel[2.8]
+  \mess{helloB}{b}{a}
+  \nextlevel[0.25]
+
+  \action*{\rezizebox{
+    Authenticate $B$\\
+    MasterSecret $g^{xy}$,\\
+    SessionSecret $k = H(g^{x}, g^{y}, g^{xy})$\\
+    finishA $= \text{Enc}(H(\text{helloA} || \text{helloB}), k)$
+  }}{a}
+  \nextlevel[2.4]
+  \mess{finishA}{a}{b}
+
+\end{msc}

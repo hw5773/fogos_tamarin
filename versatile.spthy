@@ -1,7 +1,10 @@
 theory versatile
 begin
 
-builtins: diffie-hellman, symmetric-encryption, asymmetric-encryption, signing, hashing
+builtins: diffie-hellman
+functions: senc/2, sdec/2, sign/2, verify/3, pk/1, true/0, h/1
+equations: sdec(senc(m, k), k) = m,
+           verify(msg, sign(msg, k), pk(k)) = true
 
 /*
  * Creating a platform
@@ -18,16 +21,40 @@ rule Create_Platform:
  */
 rule Create_Device:
     [ Fr(~key) ]
-  --[ CreateDevice($A, ~key) ]->
-    [ !PrivateKey('device', $A, ~key), !Certificate('device', $A, pk(~key), P) ]
+  --[ CreateDevice($P, $A, ~key) ]->
+    [ !PrivateKey('device', $A, ~key), !Certificate('device', $A, pk(~key), $P) ]
+
+/*
+ * Trust relationship
+ */
+rule Established_Trust:
+    [ 
+      !Certificate('platform', $P, pk(~k1), $P), 
+      !Certificate('device', $A, pk(~k2), $P)
+    ]
+  --[ EstablishedTrust($A, $P) ]->
+    [ 
+      !Trust($A, pk(~k1)), 
+      !Trust($P, pk(~k2))
+    ]
+
+rule Configured_Trust:
+    [
+      !Certificate('platform', P, pk(k1), P),
+      !Certificate('device', A, pk(k2), Q)
+    ]
+  --[ 
+      NOT_EQUAL(P, Q),
+      ConfiguredTrust(A, P)
+    ]->
+    [
+      !Trust(A, P)
+    ]
 
 /*
  * Corruption: the private key is revealed
+ * We assume the platform cannot be corrupted.
  */
-rule Corrupt_Platform:
-    [ !PrivateKey('platform', $P, key) ]
-  --[ CorruptPlatform($P), LtkCorrupted(key), CorruptLtkOf($P) ]->
-    [ Out(key) ]
 
 rule Corrupt_Device:
     [ !PrivateKey('device', $A, key) ]
@@ -39,28 +66,196 @@ rule Corrupt_Device:
  */
 rule Send_Request_A:
   let
-    request_message = < $A, $P, ~flexid, ~qos >
+    request_message = < A, P, ~flexid, ~qos >
+    signature = sign(request_message, key)
+    out_msg = < request_message, signature >
   in
-    [ Fr(~flexid), Fr(~qos) ]
-  --[ SendRequestMsg(A, P, flexid, qos) ]->
-    [ Out(request_mesage) ]
+    [ 
+      Fr(~flexid), 
+      Fr(~qos),
+      !Certificate('device', A, pk(key), P)
+    ]
+  --[ SendRequestMsg(A, P, ~flexid, ~qos) ]->
+    [ Out(out_msg) ]
 
 rule Send_Response_P:
   let 
-    request_message = < $A, $P, ~flexid, ~qos >
-    response_message = < $A, $B >
+    request_message = < A, P, flexid, qos >
+    req_signature = sign(request_message, k1)
+    in_msg = < request_message, req_signature >
+    response_message = < A, B >
+    resp_signature = sign(response_message, k2)
+    out_msg = < response_message, resp_signature >
   in
-    [ In(request_message) ]
-  --[ ReceiveRequestMsg(A, P, flexid, qos) ]->
-    [ Out(response_message) ]
+    [
+      In(in_msg),
+      !Certificate('device', A, pk(k1), P),
+      !Certificate('platform', P, pk(k2), P),
+      !Trust(P, pk(k1))
+    ]
+  --[ 
+      EQUAL(verify(req_signature, request_message, pk(k1)), true),
+      ReceiveRequestMsg(A, P, flexid, qos, req_signature), 
+      SendResponseMsg(P, A, B, resp_signature)
+    ]->
+    [ Out(out_msg) ]
+
+rule Receive_Response_A:
+  let 
+    response_message = < A, B >,
+    resp_signature = sign(response_message, kp),
+    in_msg = < response_message, resp_signature >,
+    flexid = pk(kb)
+  in
+    [ 
+      In(in_msg), 
+      !Certificate('platform', P, pk(kp), P),
+      !Certificate('device', B, pk(kb), P),
+      !Trust(A, pk(key))
+    ]
+  --[
+      EQUAL(verify(resp_signature, response_message, pk(kp)), true),
+      ReceiveResponseMsg(P, A, B, resp_signature)
+    ]->
+    [ Connection(A, B, flexid) ]
 
 rule Send_Hello_A:
   let
-    response_message = < $A, $B >
-  in 
-    [ In(response_message) ]
-  --[ StartSession(A, B),
-      RequesterHello(A, )
-  
+    cert = < A, sign(h(pk(ka)), kp) >,
+    initiator_hello = < 'g'^(~x), pk(ka), cert >
+  in
+    [
+      Fr(~x),
+      Connection(A, B, flexid),
+      !PrivateKey('platform', P, kp),
+      !Certificate('device', A, pk(ka), P)
+    ]
+  --[
+    StartThread(~x),
+    SendInitiatorHello(A, B, flexid, initiator_hello)
+  ]->
+  [ 
+    Out(initiator_hello),
+    InitiatorHello(A, B, flexid, ~x, initiator_hello)
+  ]
+
+rule Send_Hello_B:
+  let
+    initiator_hello = < 'g'^(x), pk(ka), cert >,
+    responser_hello = < 'g'^(~y), pk(kb)>,
+    master_secret = 'g'^(xy),
+    shared_secret = h(< 'g'^x, 'g'^y, 'g'^(xy) >),
+    transcript = senc(h(initiator_hello), shared_secret)
+    out_msg = < responser_hello, transcript, aenc(transcript, kb) >
+  in
+    [
+      Fr(~y),
+      In(initiator_hello),
+      InitiatorHello(A, B, h(pk(kb)), x, initiator_hello),
+      !Certificate('platform', P, pk(kp), P),
+      !Certificate('device', A, pk(ka), P),
+      !Certificate('device', B, pk(kb), P),
+      !Trust(A, pk(kp)),
+      !Trust(B, pk(kp))
+    ]
+  --[
+      EQUAL(verify(snd(cert), h(pk(ka)), kp), true),
+      VerifySignature(initiator_hello, P, A),
+      SendResponserHello(B, A, flexid, ~x, ~y, initiator_hello, responser_hello)
+    ]->
+    [ 
+      Out(out_msg),
+      ResponserHello(B, A, flexid, ~x, ~y, initiator_hello, responser_hello)
+    ]
+
+rule Send_Finished_A:
+  let
+    in_transcript = initiator_hello
+    out_transcript = < initiator_hello, responser_hello >
+    master_secret = 'g'^(xy)
+    shared_secret = h(<'g'^x, 'g'^y, 'g'^(xy)>)
+    initiator_finished = senc(h(out_transcript), shared_secret)
+  in
+    [
+      In(< responser_hello, transcript, signature >),
+      ResponserHello(B, A, flexid, x, y, initiator_hello, responser_hello),
+      !Certificate('device', B, pk(kb), P)
+    ]
+  --[
+      EQUAL(verify(transcript, signature, pk(kb)), true),
+      EQUAL(sdec(transcript, shared_secret), h(in_transcript)),
+      EQUAL(flexid, h(pk(kb))),
+      VerifySignature(responser_hello, P, B),
+      VerifyTranscript(A, in_transcript),
+      MasterSecretEstablished(A, B, 'g'^(xy))
+    ]-->
+    [
+      Out(initiator_finished),
+      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responser_hello, initiator_finished)
+    ]
+
+rule Receive_Finished_B:
+  let
+    transcript = < initiator_hello, responser_hello >,
+  in
+    [
+      In(initiator_finished),
+      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responser_hello, initiator_finished)
+    ]
+  --[
+      EQUAL(sdec(initiator_finished, shared_secret), h(transcript)),
+      VerifyTranscript(B, transcript),
+      SessionEstablished(A, B, 'g'^(xy))
+    ]-->
+    [
+      SessionEstablished(A, B)
+    ]
+
+
+// ------------------------------ //
+// ----------- Lemmas ----------- //
+// ------------------------------ //
+lemma platform_accountability:
+  all-traces
+  "
+  All A B P m #ta.ReceiveResponseMsg(P, A, B, m)@ta ==>
+  (Ex #tb #tc.(SendResponseMsg(P, A, B, m)@tb 
+              & TrustRelationship(A, P)@tc
+              & (#tb < #ta)
+              & (#tc < #tb)))
+  "
+
+lemma peer_authentication:
+  all-traces
+  "
+  All A B #ta.SessionEstablished(A, B)@ta ==>
+  (Ex A B P m1 m2 k1, k2 #tb #tc #td #te #tf.(VerifySignature(m1, P, B)@tb
+              & VerifySignature(m2, P, A)@tc
+              & CreateDevice(P, A, k1)@td
+              & CreateDevice(P, B, k2)@te
+              & CreatePlatform(P)@tf
+              & (#tb < #tc)
+              & (#td < #tc)
+              & (#te < #tc)
+              & (#tf < #td)
+              & (#tf < #te)))
+  "
+
+// ------------------------------ //
+// -------- Restrictions -------- //
+// ------------------------------ //
+
+// Equality
+restriction equal:
+"
+  All l r #t.
+    EQUAL(l, r) @t ==> l = r
+"
+
+restriction not_equal:
+"
+  All l r #t.
+    NOT_EQUAL(l, r) @t ==> l != r
+"
 
 end
