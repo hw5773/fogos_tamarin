@@ -38,6 +38,18 @@ rule Established_Trust:
       !Trust($P, pk(~k2))
     ]
 
+rule Configured_Trust:
+    [
+      !Certificate('platform', P, pk(k1), P),
+      !Certificate('device', A, pk(k2), Q)
+    ]
+  --[ 
+      ConfiguredTrust(A, P)
+    ]->
+    [
+      !Trust(A, pk(k1))
+    ]
+
 /*
  * Corruption: the private key is revealed
  * We assume the platform cannot be corrupted.
@@ -132,7 +144,7 @@ rule Send_Hello_B:
     initiator_hello = < 'g'^(~x), pk(ka), cert >
     responder_hello = < 'g'^(~y), pk(kb)>
     master_secret = 'g'^(~x)^(~y)
-    shared_secret = h(master_secret)
+    shared_secret = h(< 'g'^(~x), 'g'^(~y), master_secret >)
     transcript = senc(h(initiator_hello), shared_secret)
     signature = sign(transcript, kb)
     out_msg = < responder_hello, transcript, signature >
@@ -164,7 +176,7 @@ rule Send_Finished_A:
     in_transcript = initiator_hello
     out_transcript = < initiator_hello, responder_hello >
     master_secret = 'g'^x^y
-    shared_secret = h(master_secret)
+    shared_secret = h(<'g'^x, 'g'^y, master_secret >)
     initiator_finished = senc(h(out_transcript), shared_secret)
   in
     [
@@ -183,22 +195,21 @@ rule Send_Finished_A:
     ]->
     [
       Out(initiator_finished),
-      InitiatorFinished(A, B, flexid, x, y, master_secret, initiator_hello, responder_hello, initiator_finished)
+      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responder_hello, initiator_finished)
     ]
 
 rule Receive_Finished_B:
   let
     transcript = < initiator_hello, responder_hello >
-	shared_secret = h(master_secret)
   in
     [
       In(initiator_finished),
-      InitiatorFinished(A, B, flexid, x, y, master_secret, initiator_hello, responder_hello, initiator_finished)
+      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responder_hello, initiator_finished)
     ]
   --[
       EQUAL(sdec(initiator_finished, shared_secret), h(transcript)),
       VerifyTranscript(B, transcript),
-      SessionEstablished(A, B, master_secret)
+      SessionEstablished(A, B, 'g'^(x * y))
     ]->
     [
     ]
