@@ -44,11 +44,10 @@ rule Configured_Trust:
       !Certificate('device', A, pk(k2), Q)
     ]
   --[ 
-      NOT_EQUAL(P, Q),
       ConfiguredTrust(A, P)
     ]->
     [
-      !Trust(A, P)
+      !Trust(A, pk(k1))
     ]
 
 /*
@@ -75,26 +74,28 @@ rule Send_Request_A:
       Fr(~qos),
       !Certificate('device', A, pk(key), P)
     ]
-  --[ SendRequestMsg(A, P, ~flexid, ~qos) ]->
+  --[ 
+      SendRequestMsg(A, P, ~flexid, ~qos)
+    ]->
     [ Out(out_msg) ]
 
 rule Send_Response_P:
   let 
     request_message = < A, P, flexid, qos >
-    req_signature = sign(request_message, k1)
     in_msg = < request_message, req_signature >
     response_message = < A, B >
-    resp_signature = sign(response_message, k2)
+    resp_signature = sign(response_message, kp)
     out_msg = < response_message, resp_signature >
   in
     [
       In(in_msg),
-      !Certificate('device', A, pk(k1), P),
-      !Certificate('platform', P, pk(k2), P),
-      !Trust(P, pk(k1))
+      !Certificate('device', A, pk(ka), P),
+      !Certificate('device', B, pk(kb), P),
+      !Certificate('platform', P, pk(kp), P),
+      !Trust(P, pk(ka))
     ]
   --[ 
-      EQUAL(verify(req_signature, request_message, pk(k1)), true),
+      EQUAL(verify(request_message, req_signature, pk(ka)), true),
       ReceiveRequestMsg(A, P, flexid, qos, req_signature), 
       SendResponseMsg(P, A, B, resp_signature)
     ]->
@@ -102,10 +103,10 @@ rule Send_Response_P:
 
 rule Receive_Response_A:
   let 
-    response_message = < A, B >,
-    resp_signature = sign(response_message, kp),
-    in_msg = < response_message, resp_signature >,
-    flexid = pk(kb)
+    response_message = < A, B >
+    resp_signature = sign(response_message, kp)
+    in_msg = < response_message, resp_signature >
+    flexid = h(pk(kb))
   in
     [ 
       In(in_msg), 
@@ -114,14 +115,14 @@ rule Receive_Response_A:
       !Trust(A, pk(key))
     ]
   --[
-      EQUAL(verify(resp_signature, response_message, pk(kp)), true),
+      EQUAL(verify(response_message, resp_signature, pk(kp)), true),
       ReceiveResponseMsg(P, A, B, resp_signature)
     ]->
     [ Connection(A, B, flexid) ]
 
 rule Send_Hello_A:
   let
-    cert = < A, sign(h(pk(ka)), kp) >,
+    cert = < A, sign(h(pk(ka)), kp) >
     initiator_hello = < 'g'^(~x), pk(ka), cert >
   in
     [
@@ -131,27 +132,27 @@ rule Send_Hello_A:
       !Certificate('device', A, pk(ka), P)
     ]
   --[
-    StartThread(~x),
-    SendInitiatorHello(A, B, flexid, initiator_hello)
-  ]->
-  [ 
-    Out(initiator_hello),
-    InitiatorHello(A, B, flexid, ~x, initiator_hello)
-  ]
+      SendInitiatorHello(A, B, flexid, initiator_hello)
+    ]->
+    [ 
+      Out(initiator_hello),
+      InitiatorHello(A, B, flexid, ~x, initiator_hello)
+    ]
 
 rule Send_Hello_B:
   let
-    initiator_hello = < 'g'^(x), pk(ka), cert >,
-    responser_hello = < 'g'^(~y), pk(kb)>,
-    master_secret = 'g'^(xy),
-    shared_secret = h(< 'g'^x, 'g'^y, 'g'^(xy) >),
+    initiator_hello = < 'g'^(~x), pk(ka), cert >
+    responder_hello = < 'g'^(~y), pk(kb)>
+    master_secret = 'g'^(~x)^(~y)
+    shared_secret = h(< 'g'^(~x), 'g'^(~y), master_secret >)
     transcript = senc(h(initiator_hello), shared_secret)
-    out_msg = < responser_hello, transcript, aenc(transcript, kb) >
+    signature = sign(transcript, kb)
+    out_msg = < responder_hello, transcript, signature >
   in
     [
       Fr(~y),
       In(initiator_hello),
-      InitiatorHello(A, B, h(pk(kb)), x, initiator_hello),
+      InitiatorHello(A, B, flexid, ~x, initiator_hello),
       !Certificate('platform', P, pk(kp), P),
       !Certificate('device', A, pk(ka), P),
       !Certificate('device', B, pk(kb), P),
@@ -159,86 +160,109 @@ rule Send_Hello_B:
       !Trust(B, pk(kp))
     ]
   --[
-      EQUAL(verify(snd(cert), h(pk(ka)), kp), true),
+      EQUAL(verify(h(pk(ka)), snd(cert), pk(kp)), true),
       VerifySignature(initiator_hello, P, A),
-      SendResponserHello(B, A, flexid, ~x, ~y, initiator_hello, responser_hello)
+      MasterSecretEstablished(B, A, master_secret),
+      SendResponderHello(B, A, flexid, ~x, ~y, initiator_hello, responder_hello),
+      REACHABLE1()
     ]->
     [ 
       Out(out_msg),
-      ResponserHello(B, A, flexid, ~x, ~y, initiator_hello, responser_hello)
+      ResponderHello(B, A, flexid, ~x, ~y, initiator_hello, responder_hello)
     ]
 
 rule Send_Finished_A:
   let
     in_transcript = initiator_hello
-    out_transcript = < initiator_hello, responser_hello >
-    master_secret = 'g'^(xy)
-    shared_secret = h(<'g'^x, 'g'^y, 'g'^(xy)>)
+    out_transcript = < initiator_hello, responder_hello >
+    master_secret = 'g'^x^y
+    shared_secret = h(<'g'^x, 'g'^y, master_secret >)
     initiator_finished = senc(h(out_transcript), shared_secret)
   in
     [
-      In(< responser_hello, transcript, signature >),
-      ResponserHello(B, A, flexid, x, y, initiator_hello, responser_hello),
+      In(< responder_hello, transcript, signature >),
+      ResponderHello(B, A, flexid, x, y, initiator_hello, responder_hello),
       !Certificate('device', B, pk(kb), P)
     ]
   --[
       EQUAL(verify(transcript, signature, pk(kb)), true),
       EQUAL(sdec(transcript, shared_secret), h(in_transcript)),
       EQUAL(flexid, h(pk(kb))),
-      VerifySignature(responser_hello, P, B),
+      VerifySignature(responder_hello, P, B),
       VerifyTranscript(A, in_transcript),
-      MasterSecretEstablished(A, B, 'g'^(xy))
-    ]-->
+      MasterSecretEstablished(A, B, master_secret),
+      REACHABLE2()
+    ]->
     [
       Out(initiator_finished),
-      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responser_hello, initiator_finished)
+      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responder_hello, initiator_finished)
     ]
 
 rule Receive_Finished_B:
   let
-    transcript = < initiator_hello, responser_hello >,
+    transcript = < initiator_hello, responder_hello >
   in
     [
       In(initiator_finished),
-      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responser_hello, initiator_finished)
+      InitiatorFinished(A, B, flexid, x, y, shared_secret, initiator_hello, responder_hello, initiator_finished)
     ]
   --[
       EQUAL(sdec(initiator_finished, shared_secret), h(transcript)),
       VerifyTranscript(B, transcript),
-      SessionEstablished(A, B, 'g'^(xy))
-    ]-->
+      SessionEstablished(A, B, 'g'^(x * y))
+    ]->
     [
-      SessionEstablished(A, B)
     ]
 
 
 // ------------------------------ //
 // ----------- Lemmas ----------- //
 // ------------------------------ //
+/*
 lemma platform_accountability:
   all-traces
   "
   All A B P m #ta.ReceiveResponseMsg(P, A, B, m)@ta ==>
   (Ex #tb #tc.(SendResponseMsg(P, A, B, m)@tb 
-              & TrustRelationship(A, P)@tc
+              & EstablishedTrust(A, P)@tc
               & (#tb < #ta)
               & (#tc < #tb)))
   "
 
-lemma peer_authentication:
+lemma mutual_authentication:
   all-traces
   "
-  All A B #ta.SessionEstablished(A, B)@ta ==>
-  (Ex A B P m1 m2 k1, k2 #tb #tc #td #te #tf.(VerifySignature(m1, P, B)@tb
+  All A B k #ta.SessionEstablished(A, B, k)@ta ==>
+  (Ex A B P m1 m2 kp ka kb #tb #tc #td #te #tf.
+              VerifySignature(m1, P, B)@tb
               & VerifySignature(m2, P, A)@tc
-              & CreateDevice(P, A, k1)@td
-              & CreateDevice(P, B, k2)@te
-              & CreatePlatform(P)@tf
+              & CreateDevice(P, A, ka)@td
+              & CreateDevice(P, B, kb)@te
+              & CreatePlatform(P, kp)@tf
               & (#tb < #tc)
               & (#td < #tc)
               & (#te < #tc)
               & (#tf < #td)
-              & (#tf < #te)))
+              & (#tf < #te))
+  "
+
+lemma channel_security:
+  all-traces
+  "
+  All A B k #ta.SessionEstablished(A, B, k)@ta ==>
+  (Ex #tb #tc.MasterSecretEstablished(A, B, k)@tb
+                & MasterSecretEstablished(B, A, k)@tc
+                & (#ta < #tc)
+                & (#tc < #tb))
+  "
+*/
+
+lemma existence_reachability:
+  exists-trace
+  "
+  Ex #t1 #t2.REACHABLE1()@t1
+           & REACHABLE2()@t2
+           & t1 < t2
   "
 
 // ------------------------------ //
@@ -250,12 +274,6 @@ restriction equal:
 "
   All l r #t.
     EQUAL(l, r) @t ==> l = r
-"
-
-restriction not_equal:
-"
-  All l r #t.
-    NOT_EQUAL(l, r) @t ==> l != r
 "
 
 end

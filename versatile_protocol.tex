@@ -27,7 +27,7 @@
     helloA $= (g^{x}, pk_{A}, \text{Sign}(H(pk_{A}, sk_{P}))$
   }}{a}
   \nextlevel[1.6]
-  \mess{helloA}{a}{b}
+  \mess{$\text{hello}_{A}$}{a}{b}
   \nextlevel[0.25]
 
   \action*{\rezizebox{
@@ -38,17 +38,17 @@
     transcript $= \text{Enc}(H(\text{helloA}), k)$\\
     helloB $= (g^{y}, pk_{B}, \text{Sign}(\text{transcript}, sk_{B}))$
   }}{b}
-  \nextlevel[2.8]
-  \mess{helloB}{b}{a}
+  \nextlevel[3.2]
+  \mess{$\text{hello}_{B}$}{b}{a}
   \nextlevel[0.25]
 
   \action*{\rezizebox{
     Authenticate $B$\\
     MasterSecret $g^{xy}$,\\
     SessionSecret $k = H(g^{x}, g^{y}, g^{xy})$\\
-    finishA $= \text{Enc}(H(\text{helloA} || \text{helloB}), k)$
+    finishA $= \text{Enc}(H(\text{hello}_{A} || \text{hello}_{B}), k)$
   }}{a}
   \nextlevel[2.4]
-  \mess{finishA}{a}{b}
+  \mess{$\text{finish}_{A}$}{a}{b}
 
 \end{msc}
