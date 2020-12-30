@@ -119,11 +119,13 @@ rule Send_Hello_A:
       Fr(~x),
       Connection(A, B, flexid),
       !PrivateKey('platform', P, kp),
-      !Certificate('device', A, pk(ka), P)
+      !Certificate('device', A, pk(ka), P),
+      !Certificate('device', B, pk(kb), P)
     ]
   --[
+      EQUAL(flexid, h(pk(kb))),
       SendInitiatorHello(A, B, flexid, initiator_hello),
-      HandshakeStart(flexid)
+      HandshakeStart(A, B, ~x, flexid)
     ]->
     [ 
       Out(initiator_hello),
@@ -152,7 +154,8 @@ rule Send_Hello_B:
     ]
   --[
       EQUAL(verify(h(pk(ka)), snd(cert), pk(kp)), true),
-      VerifySignature(initiator_hello, P, A),
+      EQUAL(flexid, h(pk(kb))),
+      VerifySignature(initiator_hello, ~x, ~y, P, kp, A, ka),
       MasterSecretEstablished(B, A, master_secret),
       SendResponderHello(B, A, flexid, ~x, ~y, initiator_hello, responder_hello)
     ]->
@@ -172,13 +175,14 @@ rule Send_Finished_A:
     [
       In(< responder_hello, transcript, signature >),
       ResponderHello(B, A, flexid, x, y, initiator_hello, responder_hello),
+      !Certificate('platform', P, pk(kp), P),
       !Certificate('device', B, pk(kb), P)
     ]
   --[
       EQUAL(verify(transcript, signature, pk(kb)), true),
       EQUAL(sdec(transcript, shared_secret), h(in_transcript)),
       EQUAL(flexid, h(pk(kb))),
-      VerifySignature(responder_hello, P, B),
+      VerifySignature(responder_hello, x, y, P, kp, B, kb),
       VerifyTranscript(A, in_transcript),
       MasterSecretEstablished(A, B, master_secret)
     ]->
@@ -191,15 +195,19 @@ rule Receive_Finished_B:
   let
     transcript = < initiator_hello, responder_hello >
 	  shared_secret = h(master_secret)
+    initiator_finished = senc(h(transcript), shared_secret)
   in
     [
       In(initiator_finished),
-      InitiatorFinished(A, B, flexid, x, y, master_secret, initiator_hello, responder_hello, initiator_finished)
+      InitiatorFinished(A, B, flexid, x, y, master_secret, initiator_hello, responder_hello, initiator_finished),
+      EQUAL(flexid, h(pk(kb))),
+      !Certificate('device', A, pk(ka), P),
+      !Certificate('device', B, pk(kb), P)
     ]
   --[
       EQUAL(sdec(initiator_finished, shared_secret), h(transcript)),
       VerifyTranscript(B, transcript),
-      SessionEstablished(flexid, A, B, master_secret),
+      SessionEstablished(flexid, x, y, A, B, ka, kb, master_secret),
       REACHABLE()
     ]->
     [
@@ -222,13 +230,13 @@ lemma platform_accountability:
 lemma mutual_authentication:
   all-traces
   "
-  All A B id k #ta.SessionEstablished(id, A, B, k)@ta ==>
-  (Ex A B P m1 m2 kp ka kb #tb #tc #td #te #tf #tg #th #ti.
+  All A B x y id ka kb k #ta.SessionEstablished(id, x, y, A, B, ka, kb, k)@ta ==>
+  (Ex A B P m1 m2 kp #tb #tc #td #te #tf #tg #th #ti.
               SendRequestMsg(A, P, id)@tb
               & ReceiveResponseMsg(P, A, B, id)@tc
-              & HandshakeStart(id)@td
-              & VerifySignature(m1, P, B)@te
-              & VerifySignature(m2, P, A)@tf
+              & HandshakeStart(A, B, x, id)@td
+              & VerifySignature(m1, x, y, P, kp, B, kb)@te
+              & VerifySignature(m2, x, y, P, kp, A, ka)@tf
               & CreateDevice(P, A, ka)@tg
               & CreateDevice(P, B, kb)@th
               & CreatePlatform(P, kp)@ti
@@ -237,15 +245,18 @@ lemma mutual_authentication:
               & (#td < #te)
               & (#td < #tf)
               & (#te < #ta)
-              & (#tf < #ta))
+              & (#tf < #ta)
+              & (#tg < #tb)
+              & (#th < #tb)
+              & (#ti < #tb))
   "
 
 lemma channel_security:
   all-traces
   "
-  All A B id k #ta.SessionEstablished(id, A, B, k)@ta ==>
+  All A B x y id ka kb k #ta.SessionEstablished(id, x, y, A, B, ka, kb, k)@ta ==>
   (Ex #tb #tc #td.
-                HandshakeStart(id)@tb
+                HandshakeStart(A, B, x, id)@tb
                 & MasterSecretEstablished(A, B, k)@tc
                 & MasterSecretEstablished(B, A, k)@td
                 & (#tb < #tc)
