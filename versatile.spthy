@@ -12,30 +12,32 @@ equations: sdec(senc(m, k), k) = m,
  */
 
 rule Create_Platform:
-    [ Fr(~key) ]
-  --[ CreatePlatform($P, ~key) ]->
-    [ !PrivateKey('platform', $P, ~key), !Certificate('platform', $P, pk(~key), $P) ]
+    [ Fr(~kp) ]
+  --[ CreatePlatform($P, ~kp) ]->
+    [ !PrivateKey('platform', $P, ~kp), !Certificate('platform', $P, pk(~kp), $P) ]
 
 /*
  * Creating a device
  */
 rule Create_Device:
-    [ Fr(~key) ]
-  --[ CreateDevice($P, $A, ~key) ]->
-    [ !PrivateKey('device', $A, ~key), !Certificate('device', $A, pk(~key), $P) ]
+    [ Fr(~ka) ]
+  --[ CreateDevice($P, $A, ~ka) ]->
+    [ !PrivateKey('device', $A, ~ka), 
+      !Certificate('device', $A, pk(~ka), $P) 
+    ]
 
 /*
  * Trust relationship
  */
 rule Established_Trust:
     [ 
-      !Certificate('platform', $P, pk(~k1), $P), 
-      !Certificate('device', $A, pk(~k2), $P)
+      !Certificate('platform', $P, pk(~kp), $P), 
+      !Certificate('device', $A, pk(~ka), $P)
     ]
   --[ EstablishedTrust($A, $P) ]->
     [ 
-      !Trust($A, pk(~k1)), 
-      !Trust($P, pk(~k2))
+      !Trust($A, pk(~kp)), 
+      !Trust($P, pk(~ka))
     ]
 
 /*
@@ -53,17 +55,18 @@ rule Corrupt_Device:
  */
 rule Send_Request_A:
   let
-    request_message = < A, P, ~flexid, ~qos >
-    signature = sign(request_message, key)
+    flexid = h(pk(kb))
+    request_message = < A, P, flexid, ~qos >
+    signature = sign(request_message, ka)
     out_msg = < request_message, signature >
   in
     [ 
-      Fr(~flexid), 
       Fr(~qos),
-      !Certificate('device', A, pk(key), P)
+      !Certificate('device', A, pk(ka), P),
+      !Certificate('device', B, pk(kb), P)
     ]
   --[ 
-      SendRequestMsg(A, P, ~flexid)
+      SendRequestMsg(A, P, flexid)
     ]->
     [ Out(out_msg) ]
 
@@ -71,7 +74,7 @@ rule Send_Response_P:
   let 
     request_message = < A, P, flexid, qos >
     in_msg = < request_message, req_signature >
-    response_message = < A, B >
+    response_message = < A, B, flexid >
     resp_signature = sign(response_message, kp)
     out_msg = < response_message, resp_signature >
   in
@@ -91,16 +94,15 @@ rule Send_Response_P:
 
 rule Receive_Response_A:
   let 
-    response_message = < A, B >
+    response_message = < A, B, flexid >
     resp_signature = sign(response_message, kp)
     in_msg = < response_message, resp_signature >
-    flexid = h(pk(kb))
   in
     [ 
       In(in_msg), 
       !Certificate('platform', P, pk(kp), P),
       !Certificate('device', B, pk(kb), P),
-      !Trust(A, pk(key))
+      !Trust(A, pk(kp))
     ]
   --[
       EQUAL(verify(response_message, resp_signature, pk(kp)), true),
